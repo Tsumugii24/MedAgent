@@ -2,6 +2,9 @@ import os
 from flask import Flask, request, jsonify
 from autogen import ConversableAgent, UserProxyAgent
 import json
+import requests
+import base64
+from openai import OpenAI
 
 app = Flask(__name__)
 
@@ -15,188 +18,79 @@ config_list = [
 ]
 
 SYSTEM_PROMPT = f"""
-you are a helpful assistant.
+you are an experienced doctor.
 """
 
 # 定义tool_use
-def find_path(x, y):
-    return json.dumps({"action": "find_path", "position": [x, y], "result": "成功找到通往({},{})的路径".format(x, y)})
+def analyze_image(image_source):
+    """分析图片内容并返回描述"""
+    try:
+        # 判断是否为URL
+        if image_source.startswith(('http://', 'https://')):
+            response = requests.get(image_source)
+            base64_image = base64.b64encode(response.content).decode('utf-8')
+        else:
+            with open(image_source, "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode('utf-8')
 
-def chop_tree(x, y):
-    return json.dumps({"action": "chop_tree", "position": [x, y], "result": "在({},{})砍倒了一棵树".format(x, y)})
-
-def plow_land(x, y):
-    return json.dumps({"action": "plow_land", "position": [x, y], "result": "在({},{})耕地完成".format(x, y)})
-
-def cut_grass(x, y):
-    return json.dumps({"action": "cut_grass", "position": [x, y], "result": "在({},{})割掉了杂草".format(x, y)})
-
-def water_plant(x, y):
-    return json.dumps({"action": "water_plant", "position": [x, y], "result": "在({},{})给植物浇了水".format(x, y)})
-
-def plant_seed(x, y, seed_type):
-    return json.dumps({"action": "plant_seed", "position": [x, y], "seed_type": seed_type, "result": "在({},{})种下了{}".format(x, y, seed_type)})
-
-def harvest(x, y):
-    return json.dumps({"action": "harvest", "position": [x, y], "result": "在({},{})收获了作物".format(x, y)})
-
-def build_furniture(x, y, furniture_type):
-    return json.dumps({"action": "build_furniture", "position": [x, y], "type": furniture_type, "result": "在({},{})建造了{}".format(x, y, furniture_type)})
-
-def do_nothing(x, y):
-    return json.dumps({"action": "do_nothing", "position": [x, y], "result": "在({},{})无所事事地度过了一段时间".format(x, y)})
-
-def sleep(x, y):
-    return json.dumps({"action": "sleep", "position": [x, y], "result": "在({},{})睡了一觉".format(x, y)})
-
-def plan_daily_schedule():
-    return json.dumps({
-        "action": "plan_daily_schedule",
-        "schedule": [
-            {"time": "morning", "activity": "", "function": None},
-            {"time": "noon", "activity": "", "function": None},
-            {"time": "afternoon", "activity": "", "function": None},
-            {"time": "evening", "activity": "", "function": None}
-        ]
-    })
+        client = OpenAI(
+            api_key=os.getenv('OPENAI_API_KEY'),
+            base_url=os.getenv('OPENAI_BASE_URL')
+        )
+        
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What's the content of this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=300,
+        )
+        
+        return json.dumps({
+            "action": "analyze_image", 
+            "source": image_source,
+            "result": response.choices[0].message.content
+        })
+        
+    except Exception as e:
+        return json.dumps({
+            "action": "analyze_image",
+            "source": image_source,
+            "error": str(e)
+        })
 
 # 定义可用的函数
 functions = [
     {
-        "name": "find_path",
-        "description": "寻找到指定位置的路径",
+        "name": "analyze_image",
+        "description": "分析图片内容并返回描述",
         "parameters": {
             "type": "object",
             "properties": {
-                "x": {"type": "integer", "description": "目标位置的X坐标"},
-                "y": {"type": "integer", "description": "目标位置的Y坐标"}
+                "image_source": {
+                    "type": "string", 
+                    "description": "图片的本地路径或URL地址"
+                }
             },
-            "required": ["x", "y"]
-        }
-    },
-    {
-        "name": "chop_tree",
-        "description": "在指定位置砍树",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer", "description": "砍树位置的X坐标"},
-                "y": {"type": "integer", "description": "砍树位置的Y坐标"}
-            },
-            "required": ["x", "y"]
-        }
-    },
-    {
-        "name": "plow_land",
-        "description": "在指定位置耕地",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer", "description": "耕地位置的X坐标"},
-                "y": {"type": "integer", "description": "耕地位置的Y坐标"}
-            },
-            "required": ["x", "y"]
-        }
-    },
-    {
-        "name": "cut_grass",
-        "description": "在指定位置割草",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer", "description": "割草位置的X坐标"},
-                "y": {"type": "integer", "description": "割草位置的Y坐标"}
-            },
-            "required": ["x", "y"]
-        }
-    },
-    {
-        "name": "water_plant",
-        "description": "在指定位置给植物浇水",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer", "description": "浇水位置的X坐标"},
-                "y": {"type": "integer", "description": "浇水位置的Y坐标"}
-            },
-            "required": ["x", "y"]
-        }
-    },
-    {
-        "name": "plant_seed",
-        "description": "在指定位置播种",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer", "description": "播种位置的X坐标"},
-                "y": {"type": "integer", "description": "播种位置的Y坐标"},
-                "seed_type": {"type": "string", "description": "种子类型"}
-            },
-            "required": ["x", "y", "seed_type"]
-        }
-    },
-    {
-        "name": "harvest",
-        "description": "在指定位置收获作物",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer", "description": "收获位置的X坐标"},
-                "y": {"type": "integer", "description": "收获位置的Y坐标"}
-            },
-            "required": ["x", "y"]
-        }
-    },
-    {
-        "name": "build_furniture",
-        "description": "在指定位置建造家具",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer", "description": "建造位置的X坐标"},
-                "y": {"type": "integer", "description": "建造位置的Y坐标"},
-                "furniture_type": {"type": "string", "description": "家具类型"}
-            },
-            "required": ["x", "y", "furniture_type"]
-        }
-    },
-    {
-        "name": "do_nothing",
-        "description": "在指定位置无所事事",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer", "description": "X坐标"},
-                "y": {"type": "integer", "description": "Y坐标"}
-            },
-            "required": ["x", "y"]
-        }
-    },
-    {
-        "name": "sleep",
-        "description": "在指定位置睡觉",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer", "description": "X坐标"},
-                "y": {"type": "integer", "description": "Y坐标"}
-            },
-            "required": ["x", "y"]
-        }
-    },
-    {
-        "name": "plan_daily_schedule",
-        "description": "规划一天的行程,包括morning, noon, afternoon, evening四个时间段及其对应的活动",
-        "parameters": {
-            "type": "object",
-            "properties": {}
+            "required": ["image_source"]
         }
     }
 ]
 
-# 创建村长爷爷NPC
+# 定义医生agent
 agent = ConversableAgent(
-    name="village_elder",
+    name="doctor",
     system_message=SYSTEM_PROMPT,
     human_input_mode="NEVER",
     llm_config={
@@ -207,9 +101,9 @@ agent = ConversableAgent(
     }
 )
 
-# 创建NPC字典
+# 创建agent字典
 npc_agents = {
-    "village_elder": agent,
+    "doctor": agent,
 }
 
 # 创建用户代理
@@ -227,7 +121,7 @@ def chat():
     data = request.json
     user_message = data.get('message', '')
     session_id = data.get('session_id', 'default')
-    npc_name = data.get('npc_name', 'village_elder')
+    npc_name = data.get('npc_name', 'doctor')
 
     if npc_name not in npc_agents:
         return jsonify({"error": "Invalid NPC name"}), 400
@@ -270,28 +164,8 @@ def chat():
             arguments = json.loads(function_call['arguments'])
             
             # 执行函数调用
-            if function_name == 'find_path':
-                function_result = find_path(arguments['x'], arguments['y'])
-            elif function_name == 'chop_tree':
-                function_result = chop_tree(arguments['x'], arguments['y'])
-            elif function_name == 'plow_land':
-                function_result = plow_land(arguments['x'], arguments['y'])
-            elif function_name == 'cut_grass':
-                function_result = cut_grass(arguments['x'], arguments['y'])
-            elif function_name == 'water_plant':
-                function_result = water_plant(arguments['x'], arguments['y'])
-            elif function_name == 'plant_seed':
-                function_result = plant_seed(arguments['x'], arguments['y'], arguments['seed_type'])
-            elif function_name == 'harvest':
-                function_result = harvest(arguments['x'], arguments['y'])
-            elif function_name == 'build_furniture':
-                function_result = build_furniture(arguments['x'], arguments['y'], arguments['furniture_type'])
-            elif function_name == 'do_nothing':
-                function_result = do_nothing(arguments['x'], arguments['y'])
-            elif function_name == 'sleep':
-                function_result = sleep(arguments['x'], arguments['y'])
-            elif function_name == 'plan_daily_schedule':
-                function_result = plan_daily_schedule()
+            if function_name == 'analyze_image':
+                function_result = analyze_image(arguments['image_source'])
             else:
                 function_result = json.dumps({"error": "未知的函数调用"})
 
